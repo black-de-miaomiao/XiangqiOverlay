@@ -7,7 +7,7 @@ namespace XiangqiOverlay.Engine;
 /// Pikafish / UCI 协议通信引擎
 /// 通过 UCI 协议与 Pikafish 进程通信，发送局面并获取分析结果
 /// </summary>
-public sealed class UciEngine : IDisposable
+public sealed class UciEngine : IUciEngine
 {
     private Process? _process;
     private StreamWriter? _stdin;

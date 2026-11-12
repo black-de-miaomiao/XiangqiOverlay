@@ -7,7 +7,7 @@ namespace XiangqiOverlay.Engine;
 /// </summary>
 public sealed class AnalysisManager : IDisposable
 {
-    private readonly UciEngine _engine;
+    private readonly IUciEngine _engine;
     private readonly AppSettings _settings;
     private bool _disposed;
 
@@ -47,17 +47,21 @@ public sealed class AnalysisManager : IDisposable
     private readonly object _submitLock = new();
 
     public bool IsRunning => _engine.IsRunning;
-    public UciEngine Engine => _engine;
+    public IUciEngine Engine => _engine;
 
     public AnalysisManager(AppSettings settings)
-    {
-        _settings = settings;
-        _engine = new UciEngine(
+        : this(settings, new UciEngine(
             settings.PikafishExecutable,
             settings.PikafishEvalFile,
             settings.Threads,
-            settings.HashSize);
+            settings.HashSize))
+    {
+    }
 
+    public AnalysisManager(AppSettings settings, IUciEngine engine)
+    {
+        _settings = settings;
+        _engine = engine;
         _engine.AnalysisReceived += OnEngineAnalysisReceived;
         _engine.ErrorOccurred += msg => ErrorOccurred?.Invoke(msg);
         _engine.StatusChanged += msg => StatusChanged?.Invoke(msg);
@@ -102,16 +106,7 @@ public sealed class AnalysisManager : IDisposable
             {
                 _lastFen = fen;
                 StatusChanged?.Invoke($"盘面变化，正在分析...");
-
-                _engine.Stop();
-
-                // 短暂延迟后开始分析
-                Thread.Sleep(30);
-
-                if (_settings.MaxNodes > 0)
-                    _engine.Analyze(fen, _settings.MaxDepth, _settings.MaxNodes, _settings.MaxTimeMs);
-                else
-                    _engine.Analyze(fen, _settings.MaxDepth, 0, (long)(_settings.MoveTime * 1000));
+                _engine.Analyze(fen, _settings.MaxDepth, _settings.MaxNodes, _settings.MaxTimeMs);
             }
         }
     }
@@ -128,8 +123,6 @@ public sealed class AnalysisManager : IDisposable
         {
             string fen = _currentBoard.ToFen();
             _lastFen = fen;
-            _engine.Stop();
-            Thread.Sleep(30);
             _engine.Analyze(fen, _settings.MaxDepth, _settings.MaxNodes, _settings.MaxTimeMs);
         }
     }
@@ -145,9 +138,12 @@ public sealed class AnalysisManager : IDisposable
 
     private void OnEngineAnalysisReceived(AnalysisResult result)
     {
-        // 补充 FEN 信息
-        if (_currentBoard != null)
-            result.Fen = _currentBoard.ToFen();
+        string? currentFen;
+        lock (_submitLock)
+            currentFen = _currentBoard?.ToFen();
+
+        if (currentFen == null || !string.Equals(result.Fen, currentFen, StringComparison.Ordinal))
+            return;
 
         AnalysisReceived?.Invoke(result);
     }

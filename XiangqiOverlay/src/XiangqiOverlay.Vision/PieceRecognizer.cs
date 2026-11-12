@@ -2,13 +2,10 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
-using System.Runtime.CompilerServices;
 using OpenCvSharp;
 using XiangqiOverlay.Core;
 using Point = OpenCvSharp.Point;
 using Size = OpenCvSharp.Size;
-
-[assembly: InternalsVisibleTo("LogicTest")]
 
 namespace XiangqiOverlay.Vision;
 
@@ -41,11 +38,6 @@ public sealed class PieceRecognizer : IDisposable
     private readonly double[,] _lastLearnScores = new double[BoardState.Cols, BoardState.Rows];
     private readonly double[,] _lastTypeMargins = new double[BoardState.Cols, BoardState.Rows];
 
-    // 最近一帧分类器"亲眼"给出的类型（未经规则层改写）。规则层的超编降级、
-    // 象过河改兵等改写出来的类型不是视觉证据，绝不能用来自愈或学贴图——
-    // 否则被降级的真车会被"治愈"成错误兵种，并在帧间来回振荡
-    private readonly PieceType[,] _lastClassifiedTypes = new PieceType[BoardState.Cols, BoardState.Rows];
-
     // 本帧检测到的高亮格（游戏"上一步落点"标记，如 JJ象棋绿色光环）
     private readonly List<BoardPoint> _highlightedCells = new();
 
@@ -72,14 +64,6 @@ public sealed class PieceRecognizer : IDisposable
     private bool _orientationSearchDone;
     private int _orientationFrames;
 
-    // 冻结类型自愈投票：key=(col,row)，value=(原始识别的类型, 连续帧数)。
-    // 走子继承会把一次误识的类型永久冻结；当原始识别连续多帧给出不同类型时，
-    // 说明冻结值才是错的，此处自动纠正，让高亮光晕等瞬时干扰能自愈。
-    private readonly Dictionary<(int col, int row), (PieceType type, int frames)> _typeHealVotes = new();
-
-    /// <summary>冻结类型自愈所需的连续一致帧数</summary>
-    public const int TypeHealFrames = 6;
-
     /// <summary>屏幕方向是否翻转（红方在上方）</summary>
     public bool Flipped => _flipped;
 
@@ -93,7 +77,6 @@ public sealed class PieceRecognizer : IDisposable
         _flipped = false;
         _orientationSearchDone = false;
         _orientationFrames = 0;
-        _typeHealVotes.Clear();
         ResetCellEvidence();
     }
 
@@ -106,17 +89,8 @@ public sealed class PieceRecognizer : IDisposable
             {
                 _lastLearnScores[c, r] = double.NaN;
                 _lastTypeMargins[c, r] = double.NaN;
-                _lastClassifiedTypes[c, r] = PieceType.Empty;
             }
         }
-    }
-
-    /// <summary>测试钩子：注入某格本帧的分类证据（模拟分类器输出）</summary>
-    internal void SetCellEvidenceForTest(int col, int row, PieceType classified, double learnScore, double margin)
-    {
-        _lastClassifiedTypes[col, row] = classified;
-        _lastLearnScores[col, row] = learnScore;
-        _lastTypeMargins[col, row] = margin;
     }
 
     /// <summary>
@@ -291,149 +265,7 @@ public sealed class PieceRecognizer : IDisposable
         LastRawBoard = raw.Clone();
         var tracked = TrackBoard(previousBoard, raw, _highlightedCells);
         tracked.CurrentPlayer = previousBoard?.CurrentPlayer ?? tracked.CurrentPlayer;
-        HealFrozenTypes(tracked, raw);
-        LearnSpritesFromAgreement(screenshot, calibration, raw, tracked);
         return tracked;
-    }
-
-    /// <summary>
-    /// 从"原始识别与追踪结果一致"的高置信格子补充实截贴图库。
-    /// 两个独立来源（本帧视觉分类、历史冻结类型）给出同一类型时，
-    /// 该格截图就是该棋子的真实外观样本。只补缺、不覆盖、有上限。
-    /// </summary>
-    private void LearnSpritesFromAgreement(Mat screenshot, BoardCalibration calibration, BoardState raw, BoardState tracked)
-    {
-        try
-        {
-            if (!calibration.IsValid || screenshot.Empty())
-                return;
-
-            for (int c = 0; c < BoardState.Cols; c++)
-            {
-                for (int r = 0; r < BoardState.Rows; r++)
-                {
-                    var rw = raw[c, r];
-                    var t = tracked[c, r];
-                    if (rw.IsEmpty || t.IsEmpty || rw.Color != t.Color || rw.Type != t.Type)
-                        continue;
-                    // 同自愈：只学分类器亲眼认定、且置信足够的样本（NaN 安全），
-                    // 规则层改写出的类型若被学进贴图库会永久污染后续分类
-                    if (_lastClassifiedTypes[c, r] != rw.Type)
-                        continue;
-                    if (!(_lastLearnScores[c, r] >= 0.72))
-                        continue;
-
-                    string key = $"{(rw.Color == PieceColor.Red ? "R" : "B")}_{rw.Type}";
-                    if (!SpriteHasCapacity(key))
-                        continue;
-
-                    var sprite = CaptureSprite(screenshot, calibration, c, r);
-                    if (sprite != null)
-                        AddSprite(key, sprite);
-                }
-            }
-        }
-        catch
-        {
-            // 贴图学习失败不影响识别主流程
-        }
-    }
-
-    /// <summary>
-    /// 冻结类型自愈：走子继承使类型一旦认错便永久保留；
-    /// 当原始视觉识别对同一格连续 TypeHealFrames 帧给出不同的类型时，
-    /// 采信原始识别并纠正（高亮光晕消失、字模误配等干扰结束后盘面自动恢复）。
-    /// </summary>
-    public void HealFrozenTypes(BoardState tracked, BoardState raw)
-    {
-        for (int c = 0; c < BoardState.Cols; c++)
-        {
-            for (int r = 0; r < BoardState.Rows; r++)
-            {
-                var t = tracked[c, r];
-                var rw = raw[c, r];
-
-                // 仅纠正"位置与颜色都稳定、只有类型不同"的格子
-                if (t.IsEmpty || rw.IsEmpty || t.Color != rw.Color || t.Type == rw.Type)
-                {
-                    _typeHealVotes.Remove((c, r));
-                    continue;
-                }
-
-                // 原始识别的类型必须在该位置符合象棋规则（兵不在底线、士不出九宫等）
-                if (!GetLegalPieceTypesForPosition(t.Color, c, r).Contains(rw.Type))
-                {
-                    _typeHealVotes.Remove((c, r));
-                    continue;
-                }
-
-                // 目标兵种在该阵营已达编制上限时不自愈：
-                // 若原始识别对某字持续误读，无上限的自愈会把正确棋子"治愈"成错误
-                // 兵种，进而触发"超编→降级"级联，把整片棋子都带歪
-                int sameTypeCount = 0;
-                foreach (var (_, tp, cp) in tracked.GetAllPieces())
-                {
-                    if (cp == t.Color && tp == rw.Type)
-                        sameTypeCount++;
-                }
-                int cap = rw.Type switch
-                {
-                    PieceType.Pawn => 5,
-                    PieceType.King => 1,
-                    PieceType.Empty => 0,
-                    _ => 2
-                };
-                if (sameTypeCount >= cap)
-                {
-                    _typeHealVotes.Remove((c, r));
-                    continue;
-                }
-
-                // 只采信分类器本帧"亲眼"给出的类型：规则层（超编降级/象过河改兵等）
-                // 改写出的类型不是视觉证据。此前正是它把被"车超编"降级掉的底角真车
-                // 自愈成错误兵种，车数一降又放行下一次误愈，形成连锁振荡
-                var classified = _lastClassifiedTypes[c, r];
-                if (classified != PieceType.Empty && classified != rw.Type)
-                {
-                    _typeHealVotes.Remove((c, r));
-                    continue;
-                }
-
-                // 分类证据必须足够明确才允许覆盖已确认类型。注意：0/0 是分类器自己
-                // 判定的"低置信、无明显优势"（如美术字 炮/车 难分），必须拦截；
-                // 只有 NaN（本局从未分类过该格）才视为未知放行。此前用"分数>0"判断
-                // 有无证据，恰好让最不可信的识别绕过了门槛
-                double learn = _lastLearnScores[c, r];
-                double margin = _lastTypeMargins[c, r];
-                bool scoresKnown = !double.IsNaN(learn) && !double.IsNaN(margin);
-                if (scoresKnown && (learn < 0.78 || margin < 0.10))
-                {
-                    _typeHealVotes.Remove((c, r));
-                    continue;
-                }
-
-                var (voteType, frames) = _typeHealVotes.GetValueOrDefault((c, r), (rw.Type, 0));
-                if (voteType == rw.Type)
-                {
-                    frames++;
-                }
-                else
-                {
-                    voteType = rw.Type;
-                    frames = 1;
-                }
-
-                if (frames >= TypeHealFrames)
-                {
-                    tracked[c, r] = new BoardCell { Color = t.Color, Type = rw.Type };
-                    _typeHealVotes.Remove((c, r));
-                }
-                else
-                {
-                    _typeHealVotes[(c, r)] = (voteType, frames);
-                }
-            }
-        }
     }
 
     /// <summary>
@@ -502,9 +334,7 @@ public sealed class PieceRecognizer : IDisposable
         // 如果识别到接近开局阵列，自动将高置信度字模收录到自适应库中
         TryLearnAdaptiveTemplates(screenshot, calibration, board);
 
-        // 执行中国象棋规则硬约束（保证单方不超过16子且兵种不超标）
-        EnforceXiangqiRules(board);
-
+        // 原始视觉观察不执行兵种降级或数量整型；无效盘面由提交层拒绝。
         return board;
     }
 
@@ -623,21 +453,6 @@ public sealed class PieceRecognizer : IDisposable
                 var (type, learnScore, typeMargin) = ClassifyPieceWithTemplates(mask, roiBgr, color, col, row);
                 _lastLearnScores[col, row] = learnScore;
                 _lastTypeMargins[col, row] = typeMargin;
-                _lastClassifiedTypes[col, row] = type;
-
-                // 高置信度样本反哺游戏字模库，但绝不覆盖已有条目：
-                // 开局锚定阶段按"位置+颜色"学习的字模是可信的（类型由定义唯一确定），
-                // 而此处按分类结果学习存在自我强化污染风险（认错→学错→更认错），
-                // 因此只补缺，不覆盖。
-                if (learnScore >= 0.72)
-                {
-                    string key = $"{(color == PieceColor.Red ? "R" : "B")}_{type}";
-                    lock (_adaptiveTemplates)
-                    {
-                        if (!_adaptiveTemplates.ContainsKey(key))
-                            _adaptiveTemplates[key] = mask.Clone();
-                    }
-                }
 
                 return new BoardCell { Type = type, Color = color };
             }
@@ -1352,23 +1167,7 @@ public sealed class PieceRecognizer : IDisposable
         ApplyBestSingleMove(result, remainRed,   newRed,   PieceColor.Red, previousBoard, highlightedCells);
         ApplyBestSingleMove(result, remainBlack, newBlack, PieceColor.Black, previousBoard, highlightedCells);
 
-        // 将帅保底：若王者未在结果中出现，从残余或默认九宫恢复
-        if (!result.GetAllPieces().Any(p => p.type == PieceType.King && p.color == PieceColor.Red))
-        {
-            var kingOld = remainRed.FirstOrDefault(o => o.cell.Type == PieceType.King);
-            result[kingOld.cell != null ? kingOld.pt.Col : 4,
-                   kingOld.cell != null ? kingOld.pt.Row : 9]
-                = new BoardCell { Color = PieceColor.Red, Type = PieceType.King };
-        }
-        if (!result.GetAllPieces().Any(p => p.type == PieceType.King && p.color == PieceColor.Black))
-        {
-            var kingOld = remainBlack.FirstOrDefault(o => o.cell.Type == PieceType.King);
-            result[kingOld.cell != null ? kingOld.pt.Col : 4,
-                   kingOld.cell != null ? kingOld.pt.Row : 0]
-                = new BoardCell { Color = PieceColor.Black, Type = PieceType.King };
-        }
-
-        EnforceXiangqiRules(result, previousBoard);
+        // 走子追踪只继承和转移已有棋子，不执行兵种降级，也不凭空补将帅。
         return result;
     }
 
@@ -1566,192 +1365,6 @@ public sealed class PieceRecognizer : IDisposable
             if (result[pt.Col, pt.Row].IsEmpty)
                 result[pt.Col, pt.Row] = cell;
         }
-    }
-
-    /// <summary>
-    /// 强制执行中国象棋物理规则硬约束：杜绝同色棋子超过16颗或非法兵种超标
-    /// </summary>
-    public static void EnforceXiangqiRules(BoardState board, BoardState? trustedPrevious = null)
-    {
-        EnforceSideRules(board, PieceColor.Red, trustedPrevious);
-        EnforceSideRules(board, PieceColor.Black, trustedPrevious);
-    }
-
-    private static void EnforceSideRules(BoardState board, PieceColor side, BoardState? trustedPrevious)
-    {
-        var pieces = board.GetAllPieces().Where(p => p.color == side).ToList();
-
-        // 1. 总棋子数不得超过 16 颗：若因噪点超过16颗，剔除合法性得分最低的弱斑
-        if (pieces.Count > 16)
-        {
-            int toRemove = pieces.Count - 16;
-            var sorted = pieces
-                .Where(p => p.type != PieceType.King)
-                .Where(p => !IsTrustedType(trustedPrevious, p.point, side, p.type))
-                .OrderBy(p => GetPositionLegalityScore(p.point, p.type, side))
-                .ToList();
-
-            for (int i = 0; i < toRemove && i < sorted.Count; i++)
-            {
-                board[sorted[i].point.Col, sorted[i].point.Row] = new BoardCell { Type = PieceType.Empty, Color = PieceColor.Unknown };
-                pieces.Remove(sorted[i]);
-            }
-        }
-
-        // 2. 将帅严格只能有 1 颗：多余的将帅优先降级为仕/士（九宫内、价值最低），
-        //    绝不直接删除 —— 位置与颜色是视觉强特征，类型错误可自愈，删除则永久丢失
-        var kings = pieces.Where(p => p.type == PieceType.King).ToList();
-        if (kings.Count > 1)
-        {
-            bool isRed = side == PieceColor.Red;
-            var realKing = kings.OrderBy(k => isRed ? Math.Abs(k.point.Row - 9) : Math.Abs(k.point.Row - 0)).First();
-            int advisorCount = pieces.Count(p => p.type == PieceType.Advisor);
-            foreach (var fakeKing in kings.Where(k => k != realKing)
-                                           .Where(k => !IsTrustedType(trustedPrevious, k.point, side, PieceType.King)))
-            {
-                board[fakeKing.point.Col, fakeKing.point.Row] = advisorCount < 2
-                    ? new BoardCell { Color = side, Type = PieceType.Advisor }
-                    : new BoardCell { Color = side, Type = PieceType.Pawn };
-                if (advisorCount < 2) advisorCount++;
-            }
-            pieces = board.GetAllPieces().Where(p => p.color == side).ToList();
-        }
-
-        // 3. 象严格不能过河
-        var elephants = pieces.Where(p => p.type == PieceType.Elephant).ToList();
-        foreach (var el in elephants)
-        {
-            bool crossed = (side == PieceColor.Red) ? (el.point.Row < 5) : (el.point.Row > 4);
-            if (crossed && !IsTrustedType(trustedPrevious, el.point, side, PieceType.Elephant))
-            {
-                board[el.point.Col, el.point.Row] = new BoardCell { Color = side, Type = PieceType.Pawn };
-            }
-        }
-
-        // 4. 士必须在九宫
-        var advisors = pieces.Where(p => p.type == PieceType.Advisor).ToList();
-        foreach (var adv in advisors)
-        {
-            bool isRed = side == PieceColor.Red;
-            bool inPalace = (adv.point.Col >= 3 && adv.point.Col <= 5) && (isRed ? (adv.point.Row >= 7 && adv.point.Row <= 9) : (adv.point.Row >= 0 && adv.point.Row <= 2));
-            if (!inPalace && !IsTrustedType(trustedPrevious, adv.point, side, PieceType.Advisor))
-            {
-                board[adv.point.Col, adv.point.Row] = new BoardCell { Color = side, Type = PieceType.Pawn };
-            }
-        }
-
-        // 5. 单兵种上限严格封顶：车<=2, 马<=2, 炮<=2, 象<=2, 士<=2, 兵<=5
-        //    超编者降级到"尚有余量的兵种"而不是清空，杜绝误识导致的整颗棋子消失
-        ClampPieceTypeCount(board, side, PieceType.Chariot, 2, trustedPrevious);
-        ClampPieceTypeCount(board, side, PieceType.Horse, 2, trustedPrevious);
-        ClampPieceTypeCount(board, side, PieceType.Cannon, 2, trustedPrevious);
-        ClampPieceTypeCount(board, side, PieceType.Elephant, 2, trustedPrevious);
-        ClampPieceTypeCount(board, side, PieceType.Advisor, 2, trustedPrevious);
-        ClampPieceTypeCount(board, side, PieceType.Pawn, 5, trustedPrevious);
-
-        // 6. 将帅保底：识别再乱也必须有帅/将，否则 FEN 永久非法、引擎永不分析
-        if (!board.GetAllPieces().Any(p => p.type == PieceType.King && p.color == side))
-        {
-            int kingRow = side == PieceColor.Red ? 9 : 0;
-            if (board[4, kingRow].IsEmpty)
-                board[4, kingRow] = new BoardCell { Color = side, Type = PieceType.King };
-            else
-            {
-                // 中路被占则放九宫任一空位
-                foreach (var (kc, kr) in new[] { (3, kingRow), (5, kingRow), (4, side == PieceColor.Red ? 8 : 1) })
-                {
-                    if (board[kc, kr].IsEmpty)
-                    {
-                        board[kc, kr] = new BoardCell { Color = side, Type = PieceType.King };
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    private static bool IsTrustedType(BoardState? trustedPrevious, BoardPoint point, PieceColor side, PieceType type)
-        => trustedPrevious != null && trustedPrevious[point].Color == side && trustedPrevious[point].Type == type;
-
-    private static void ClampPieceTypeCount(BoardState board, PieceColor side, PieceType type, int maxCount, BoardState? trustedPrevious)
-    {
-        var list = board.GetAllPieces().Where(p => p.color == side && p.type == type).ToList();
-        if (list.Count <= maxCount)
-            return;
-
-        var excess = list
-            .Where(p => !IsTrustedType(trustedPrevious, p.point, side, type))
-            .OrderBy(p => GetPositionLegalityScore(p.point, p.type, side))
-            .Take(list.Count - maxCount);
-        foreach (var item in excess)
-        {
-            board[item.point.Col, item.point.Row] =
-                new BoardCell { Color = side, Type = PickFallbackType(board, side, item.point) };
-        }
-    }
-
-    /// <summary>
-    /// 为超编棋子挑选降级目标：优先留在对所在位置合理的低价值兵种，
-    /// 其次按剩余容量级联，仅当所有兵种全部超编（理论上不可能，容量和=16）才清空。
-    /// </summary>
-    private static PieceType PickFallbackType(BoardState board, PieceColor side, BoardPoint pt)
-    {
-        bool isRed = side == PieceColor.Red;
-        var count = new Dictionary<PieceType, int>();
-        foreach (var (_, t, c) in board.GetAllPieces())
-        {
-            if (c != side) continue;
-            count[t] = count.GetValueOrDefault(t) + 1;
-        }
-
-        // 位置对兵/卒合理且未满编时优先降为兵（价值失真最小）
-        bool pawnPlausible = isRed ? pt.Row <= 6 : pt.Row >= 3;
-        if (pawnPlausible && count.GetValueOrDefault(PieceType.Pawn) < 5)
-            return PieceType.Pawn;
-
-        foreach (var t in new[] { PieceType.Chariot, PieceType.Horse, PieceType.Cannon, PieceType.Elephant, PieceType.Advisor })
-        {
-            if (count.GetValueOrDefault(t) < 2)
-                return t;
-        }
-
-        if (count.GetValueOrDefault(PieceType.Pawn) < 5)
-            return PieceType.Pawn;
-
-        return PieceType.Empty;
-    }
-
-    private static int GetPositionLegalityScore(BoardPoint pt, PieceType type, PieceColor side)
-    {
-        bool isRed = side == PieceColor.Red;
-        int score = 100;
-
-        // 将帅必须在九宫内
-        if (type == PieceType.King)
-        {
-            bool inPalace = (pt.Col >= 3 && pt.Col <= 5) && (isRed ? (pt.Row >= 7 && pt.Row <= 9) : (pt.Row >= 0 && pt.Row <= 2));
-            if (!inPalace) score -= 1000;
-        }
-        // 仕士必须在九宫
-        else if (type == PieceType.Advisor)
-        {
-            bool inPalace = (pt.Col >= 3 && pt.Col <= 5) && (isRed ? (pt.Row >= 7 && pt.Row <= 9) : (pt.Row >= 0 && pt.Row <= 2));
-            if (!inPalace) score -= 500;
-        }
-        // 相象不能过河
-        else if (type == PieceType.Elephant)
-        {
-            bool myRiverSide = isRed ? (pt.Row >= 5) : (pt.Row <= 4);
-            if (!myRiverSide) score -= 500;
-        }
-        // 兵卒不能在初始行后方
-        else if (type == PieceType.Pawn)
-        {
-            bool behindInitial = isRed ? (pt.Row > 6) : (pt.Row < 3);
-            if (behindInitial) score -= 300;
-        }
-
-        return score;
     }
 
     public static List<(BoardPoint point, BoardCell old, BoardCell now)> DiffBoards(

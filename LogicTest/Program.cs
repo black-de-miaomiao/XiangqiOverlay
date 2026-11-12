@@ -197,29 +197,6 @@ Check("同帧吃子+走子：马类型正确转移到 (3,2)",
 Check("同帧吃子+走子：马原位不复活（幽灵）", capTracked[2, 0].IsEmpty);
 Check("同帧吃子+走子：炮被吃后不瞬移", capTracked[2, 3].Type == PieceType.Chariot && capTracked[2, 3].Color == PieceColor.Red);
 
-// ═══ 冻结类型自愈 ═══
-using (var healer = new PieceRecognizer())
-{
-    var healTracked = BoardState.InitialPosition();
-    healTracked[7, 7] = new BoardCell { Type = PieceType.Pawn, Color = PieceColor.Red }; // 红炮被冻成兵
-    var healRaw = BoardState.InitialPosition(); // 原始识别始终给出正确"炮"
-
-    for (int i = 0; i < PieceRecognizer.TypeHealFrames - 1; i++)
-        healer.HealFrozenTypes(healTracked, healRaw);
-    Check("自愈：帧数不足时不纠正", healTracked[7, 7].Type == PieceType.Pawn);
-    healer.HealFrozenTypes(healTracked, healRaw);
-    Check("自愈：连续一致帧数足够后纠正为炮", healTracked[7, 7].Type == PieceType.Cannon);
-
-    // 非法位置的类型不得通过自愈引入（红兵不可能在底线）
-    var badTracked = BoardState.InitialPosition();
-    badTracked[7, 9] = new BoardCell { Type = PieceType.Horse, Color = PieceColor.Red };
-    var badRaw = BoardState.InitialPosition();
-    badRaw[7, 9] = new BoardCell { Type = PieceType.Pawn, Color = PieceColor.Red }; // 原始识别误读为兵
-    for (int i = 0; i < PieceRecognizer.TypeHealFrames + 2; i++)
-        healer.HealFrozenTypes(badTracked, badRaw);
-    Check("自愈：位置非法的类型不被采纳", badTracked[7, 9].Type == PieceType.Horse);
-}
-
 // ═══ 预期盘面：ApplyMove 生成引擎走完的盘面 ═══
 var expBase = BoardState.InitialPosition();
 var expMove = new ChessMove(new BoardPoint(7, 7), new BoardPoint(4, 7)); // 炮二平五
@@ -390,72 +367,6 @@ if (File.Exists(userImgPath))
         Check("真实截图：红帅在 (4,9)", readResult.Board[4, 9].Type == PieceType.King && readResult.Board[4, 9].Color == PieceColor.Red);
         Check("真实截图：红车在 (0,9)", readResult.Board[0, 9].Type == PieceType.Chariot && readResult.Board[0, 9].Color == PieceColor.Red);
     }
-}
-
-// ═══ 自愈证据门槛：低置信/规则改写类型不得覆盖已确认类型 ═══
-// 复现"红炮被显示成车 → 底角真车被降级 → 振荡变子"的腐化链。
-// 用编制有余量的精简盘面，确保每个场景只可能被目标门槛拦截（而非编制上限）
-BoardState HealBoard()
-{
-    var b = new BoardState();
-    b[4, 9] = new BoardCell { Type = PieceType.King, Color = PieceColor.Red };
-    b[4, 0] = new BoardCell { Type = PieceType.King, Color = PieceColor.Black };
-    b[4, 6] = new BoardCell { Type = PieceType.Cannon, Color = PieceColor.Red };  // 已确认的炮
-    b[0, 9] = new BoardCell { Type = PieceType.Chariot, Color = PieceColor.Red }; // 只有1个车，有余量
-    return b;
-}
-
-// 场景1：分类器自判低置信的 0/0（旧代码把它当"无分数"直接放行——本次根因）
-using (var g1 = new PieceRecognizer())
-{
-    var t1 = HealBoard();
-    var r1 = HealBoard();
-    r1[4, 6] = new BoardCell { Type = PieceType.Chariot, Color = PieceColor.Red };
-    g1.SetCellEvidenceForTest(4, 6, PieceType.Chariot, learnScore: 0, margin: 0);
-    for (int i = 0; i < PieceRecognizer.TypeHealFrames + 10; i++)
-        g1.HealFrozenTypes(t1, r1);
-    Check("自愈门槛：0/0 低置信识别不得把炮改成车", t1[4, 6].Type == PieceType.Cannon);
-}
-
-// 场景2：中等分数但分差太小（炮/车难分）同样拦截
-using (var g2 = new PieceRecognizer())
-{
-    var t2 = HealBoard();
-    var r2 = HealBoard();
-    r2[4, 6] = new BoardCell { Type = PieceType.Chariot, Color = PieceColor.Red };
-    g2.SetCellEvidenceForTest(4, 6, PieceType.Chariot, learnScore: 0.85, margin: 0.04);
-    for (int i = 0; i < PieceRecognizer.TypeHealFrames + 10; i++)
-        g2.HealFrozenTypes(t2, r2);
-    Check("自愈门槛：分差不足的识别不得覆盖已确认类型", t2[4, 6].Type == PieceType.Cannon);
-}
-
-// 场景3：高置信+明确分差的真实误标仍能纠正（不误伤正常自愈）
-using (var g3 = new PieceRecognizer())
-{
-    var t3 = HealBoard();
-    var r3 = HealBoard();
-    r3[4, 6] = new BoardCell { Type = PieceType.Chariot, Color = PieceColor.Red };
-    g3.SetCellEvidenceForTest(4, 6, PieceType.Chariot, learnScore: 0.92, margin: 0.25);
-    for (int i = 0; i < PieceRecognizer.TypeHealFrames - 1; i++)
-        g3.HealFrozenTypes(t3, r3);
-    Check("自愈门槛：高置信分歧帧数不足时不纠正", t3[4, 6].Type == PieceType.Cannon);
-    g3.HealFrozenTypes(t3, r3);
-    Check("自愈门槛：高置信分歧帧数足够后纠正", t3[4, 6].Type == PieceType.Chariot);
-}
-
-// 场景4：规则层在原始盘面里把底角真车降级成炮，而分类器亲眼看到的是车——
-// 降级出的类型不是视觉证据，不得自愈（旧代码会把真车改掉并来回振荡）
-using (var g4 = new PieceRecognizer())
-{
-    var t4 = HealBoard();
-    t4[4, 6] = new BoardCell(); // 清掉炮，让红炮编制完全有余量
-    var r4 = t4.Clone();
-    r4[0, 9] = new BoardCell { Type = PieceType.Cannon, Color = PieceColor.Red }; // 规则降级结果
-    g4.SetCellEvidenceForTest(0, 9, PieceType.Chariot, learnScore: 0.95, margin: 0.30);
-    for (int i = 0; i < PieceRecognizer.TypeHealFrames + 10; i++)
-        g4.HealFrozenTypes(t4, r4);
-    Check("自愈门槛：规则层改写出的类型不当作视觉证据（底角真车保持为车）",
-        t4[0, 9].Type == PieceType.Chariot);
 }
 
 LogicTest.BoardIntegrityTests.Run(Check);

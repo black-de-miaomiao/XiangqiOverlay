@@ -1,4 +1,5 @@
 using XiangqiOverlay.Core;
+using XiangqiOverlay.Vision;
 
 namespace LogicTest;
 
@@ -52,5 +53,12 @@ public static class BoardIntegrityTests
             new[] { new BoardPoint(0, 1) }, out next);
         check("高亮落点被光晕冲淡：仍由上一盘面重建正确兵种",
             ok && next != null && next[0, 1].Type == PieceType.Chariot);
+
+        var noKings = new BoardState();
+        noKings[0, 0] = new BoardCell { Type = PieceType.Chariot, Color = PieceColor.Black };
+        noKings[0, 9] = new BoardCell { Type = PieceType.Chariot, Color = PieceColor.Red };
+        var noKingsTracked = PieceRecognizer.TrackBoard(noKings, noKings.Clone());
+        check("视觉追踪不得因规则保底而凭空生成将帅",
+            !noKingsTracked.GetAllPieces().Any(p => p.type == PieceType.King));
     }
 }

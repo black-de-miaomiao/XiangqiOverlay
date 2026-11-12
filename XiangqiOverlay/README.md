@@ -131,7 +131,8 @@ XiangqiOverlay/
 |--------|------|--------|
 | PikafishExecutable | Pikafish 引擎路径 | runtime\pikafish\pikafish.exe |
 | PikafishEvalFile | NNUE 评估函数文件 | runtime\pikafish\default_nnue.bin |
-| MaxDepth | 最大搜索深度 | 24 |
+| MaxDepth | 最大搜索深度 | 30 |
+| MaxTimeMs | 每次最长思考时间（毫秒） | 4000 |
 | Threads | 搜索线程数 | 4 |
 | HashSize | 哈希表大小 (MB) | 128 |
 | TopMoves | 悬浮层显示候选着数量 | 5 |

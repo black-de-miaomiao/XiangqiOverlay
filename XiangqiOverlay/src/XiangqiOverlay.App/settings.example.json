@@ -4,7 +4,7 @@
   "BoardCols": 9,
   "BoardRows": 10,
   "MaxDepth": 30,
-  "MaxTimeMs": 0,
+  "MaxTimeMs": 4000,
   "MaxNodes": 0,
   "AnalysisIntervalSeconds": 0.3,
   "TopMoves": 5,

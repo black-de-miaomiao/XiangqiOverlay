@@ -46,6 +46,10 @@ public partial class MainWindow : Window
         {
             12 => 0, 16 => 1, 24 => 2, 30 => 3, 0 => 4, _ => 2
         };
+        ThinkTimeCombo.SelectedIndex = settings.MaxTimeMs switch
+        {
+            1000 => 0, 2000 => 1, 6000 => 3, _ => 2
+        };
         TopMovesCombo.SelectedIndex = settings.TopMoves switch
         {
             1 => 0, 2 => 1, 3 => 2, 4 => 3, 5 => 4, _ => 4
@@ -235,6 +239,7 @@ public partial class MainWindow : Window
         _settings.Threads = int.Parse(((System.Windows.Controls.ComboBoxItem)ThreadsCombo.SelectedItem).Content.ToString()!);
         _settings.MaxDepth = ((System.Windows.Controls.ComboBoxItem)DepthCombo.SelectedItem).Content.ToString() == "0（无限）"
             ? 0 : int.Parse(((System.Windows.Controls.ComboBoxItem)DepthCombo.SelectedItem).Content.ToString()!);
+        _settings.MaxTimeMs = long.Parse(((System.Windows.Controls.ComboBoxItem)ThinkTimeCombo.SelectedItem).Tag.ToString()!);
         _settings.TopMoves = int.Parse(((System.Windows.Controls.ComboBoxItem)TopMovesCombo.SelectedItem).Content.ToString()!);
         _settings.ExcludeOverlayFromCapture = ExcludeOverlayCheck.IsChecked ?? true;
         _settings.OwnColor = ((System.Windows.Controls.ComboBoxItem)ColorCombo.SelectedItem).Tag.ToString()!;
@@ -253,6 +258,7 @@ public partial class MainWindow : Window
         bool onlyOwn = OnlyOwnMovesCheck.IsChecked ?? true;
         _settings.OnlyRecommendOwnMoves = onlyOwn;
         _controller.SetOnlyRecommendOwnMoves(onlyOwn);
+        UpdateRecommendationPrompt();
         DrawBoardPreview();
     }
 
@@ -300,6 +306,12 @@ public partial class MainWindow : Window
             var side = player == "Black" ? PlayerSide.Black : PlayerSide.Red;
             _settings.CurrentPlayer = player;
             _controller.SetCurrentPlayer(side);
+            if (_lastBoard != null)
+            {
+                _lastBoard.CurrentPlayer = side;
+                _lastAnalysis = null;
+                UpdateRecommendationPrompt();
+            }
             DrawBoardPreview();
         }
     }
@@ -308,60 +320,77 @@ public partial class MainWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
-            if (result.BestMove != null)
-            {
-                string bestMoveStr = result.BestMove.Move;
-                string pieceName = "";
-                if (_lastBoard != null)
-                {
-                    try
-                    {
-                        var cm = ChessMove.FromUcci(result.BestMove.Move);
-                        var p = _lastBoard[cm.From];
-                        pieceName = GetPieceText(p.Type, p.Color);
-                        if (!string.IsNullOrEmpty(pieceName))
-                            pieceName = $"[{pieceName}] ";
-                    }
-                    catch {}
-                }
-
-                var currentSide = _lastBoard?.CurrentPlayer ?? PlayerSide.Red;
-                var mySide = _settings.OwnColor == "Black" ? PlayerSide.Black : PlayerSide.Red;
-                bool isMyTurn = (currentSide == mySide);
-                string playerStr = currentSide == PlayerSide.Black ? "黑方" : "红方";
-                string mySideStr = mySide == PlayerSide.Black ? "黑方" : "红方";
-
-                if (_settings.OnlyRecommendOwnMoves && !isMyTurn)
-                {
-                    BestMoveText.Text = $"[等待对手走棋...] 我方执子: {mySideStr}";
-                    ScoreText.Text = $"评分: {result.Score}";
-                    WinRateText.Text = $"胜率: {result.WinRate * 100:F1}%";
-                    DepthText.Text = $"深度: {result.Depth}";
-                    PvText.Text = "当前为对手思考，轮到我方落子时将自动给出最佳招法";
-                }
-                else if (!isMyTurn)
-                {
-                    BestMoveText.Text = $"[预测{playerStr}走法] {pieceName}{bestMoveStr}";
-                    ScoreText.Text = $"评分: {result.Score}";
-                    WinRateText.Text = $"胜率: {result.WinRate * 100:F1}%";
-                    DepthText.Text = $"深度: {result.Depth}";
-                    PvText.Text = string.IsNullOrEmpty(result.BestMove.PvString)
-                        ? "（当前为对手思考，显示其最优应对）" : $"变着: {result.BestMove.PvString}";
-                }
-                else
-                {
-                    BestMoveText.Text = $"[{playerStr}推荐] {pieceName}{bestMoveStr}";
-                    ScoreText.Text = $"评分: {result.Score}";
-                    WinRateText.Text = $"胜率: {result.WinRate * 100:F1}%";
-                    DepthText.Text = $"深度: {result.Depth}";
-                    PvText.Text = string.IsNullOrEmpty(result.BestMove.PvString)
-                        ? "" : $"变着: {result.BestMove.PvString}";
-                }
-            }
+            if (_lastBoard == null || result.Fen != _lastBoard.ToFen())
+                return;
 
             _lastAnalysis = result;
+            UpdateRecommendationPrompt();
             DrawBoardPreview();
         });
+    }
+
+    private void UpdateRecommendationPrompt()
+    {
+        if (_lastBoard == null)
+        {
+            BestMoveText.Text = "—";
+            ScoreText.Text = "评分: —";
+            WinRateText.Text = "胜率: —";
+            DepthText.Text = "深度: —";
+            PvText.Text = "";
+            return;
+        }
+
+        var mySide = _settings.OwnColor == "Black" ? PlayerSide.Black : PlayerSide.Red;
+        string mySideStr = mySide == PlayerSide.Black ? "黑方" : "红方";
+        string playerStr = _lastBoard.CurrentPlayer == PlayerSide.Black ? "黑方" : "红方";
+        var kind = RecommendationPromptPolicy.Resolve(
+            _lastBoard, mySide, _settings.OnlyRecommendOwnMoves, _lastAnalysis);
+        var current = _lastAnalysis != null && _lastAnalysis.Fen == _lastBoard.ToFen()
+            ? _lastAnalysis : null;
+
+        if (kind == RecommendationPromptKind.WaitingForOpponent)
+        {
+            BestMoveText.Text = $"[等待对手走棋...] 我方执子: {mySideStr}";
+            PvText.Text = "当前为对手思考，轮到我方落子时将自动给出最佳招法";
+            SetAnalysisMetrics(null);
+            return;
+        }
+
+        if (kind == RecommendationPromptKind.Thinking || current?.BestMove == null)
+        {
+            BestMoveText.Text = mySide == _lastBoard.CurrentPlayer
+                ? $"[正在思考...] 我方执子: {mySideStr}"
+                : $"[正在分析{playerStr}走法...]";
+            PvText.Text = "正在分析最新盘面，旧结果不会用于当前棋盘";
+            SetAnalysisMetrics(null);
+            return;
+        }
+
+        var best = current!.BestMove!;
+        string pieceName = "";
+        try
+        {
+            var move = ChessMove.FromUcci(best.Move);
+            string text = GetPieceText(_lastBoard[move.From].Type, _lastBoard[move.From].Color);
+            if (!string.IsNullOrEmpty(text))
+                pieceName = $"[{text}] ";
+        }
+        catch { }
+
+        BestMoveText.Text = kind == RecommendationPromptKind.OwnRecommendation
+            ? $"[{playerStr}推荐] {pieceName}{best.Move}"
+            : $"[预测{playerStr}走法] {pieceName}{best.Move}";
+        PvText.Text = string.IsNullOrEmpty(best.PvString)
+            ? "" : $"变着: {best.PvString}";
+        SetAnalysisMetrics(current);
+    }
+
+    private void SetAnalysisMetrics(AnalysisResult? result)
+    {
+        ScoreText.Text = result == null ? "评分: —" : $"评分: {result.Score}";
+        WinRateText.Text = result == null ? "胜率: —" : $"胜率: {result.WinRate * 100:F1}%";
+        DepthText.Text = result == null ? "深度: —" : $"深度: {result.Depth}";
     }
 
     private void OnBoardRead(BoardReadResult result)
@@ -375,13 +404,19 @@ public partial class MainWindow : Window
             else
             {
                 _lastBoard = result.Board;
+                if (_lastAnalysis?.Fen != _lastBoard.ToFen())
+                    _lastAnalysis = null;
+                UpdateRecommendationPrompt();
                 int redCount = 0, blackCount = 0;
                 foreach (var (_, _, color) in _lastBoard.GetAllPieces())
                 {
                     if (color == PieceColor.Red) redCount++;
                     else if (color == PieceColor.Black) blackCount++;
                 }
-                StatusText.Text = $"盘面读取正常 (红方 {redCount} 子, 黑方 {blackCount} 子)";
+                string lastMoveText = result.LastMove is { } lastMove
+                    ? $"，走子 {lastMove.From}->{lastMove.To}" : "";
+                string nextSideText = _lastBoard.CurrentPlayer == PlayerSide.Red ? "红方" : "黑方";
+                StatusText.Text = $"盘面已同步 (红方 {redCount} 子, 黑方 {blackCount} 子){lastMoveText}，轮到{nextSideText}";
                 DrawBoardPreview();
             }
         });
@@ -548,12 +583,14 @@ public partial class MainWindow : Window
         var mySidePreview = _settings.OwnColor == "Black" ? PlayerSide.Black : PlayerSide.Red;
         bool isMyTurnPreview = (curSide == mySidePreview);
         bool shouldDrawPreviewMove = !(_settings.OnlyRecommendOwnMoves && !isMyTurnPreview);
+        bool hasCurrentAnalysis = _lastAnalysis?.BestMove != null &&
+            _lastBoard != null && _lastAnalysis.Fen == _lastBoard.ToFen();
 
-        if (shouldDrawPreviewMove && _lastAnalysis?.BestMove != null)
+        if (shouldDrawPreviewMove && hasCurrentAnalysis)
         {
             try
             {
-                var mv = ChessMove.FromUcci(_lastAnalysis.BestMove.Move);
+                var mv = ChessMove.FromUcci(_lastAnalysis!.BestMove!.Move);
                 double fx = ox + mv.From.Col * cell;
                 double fy = oy + mv.From.Row * cell;
                 double tx = ox + mv.To.Col * cell;

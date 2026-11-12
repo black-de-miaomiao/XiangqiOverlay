@@ -977,6 +977,8 @@ public sealed class MainController : IDisposable
                 Source = BoardReadMode.VisionOnly,
                 Timestamp = DateTime.Now
             };
+            PublishBoardRead(res);
+            Interlocked.Increment(ref _commitSeq);
             _analysisManager.SubmitBoard(res);
         }
     }

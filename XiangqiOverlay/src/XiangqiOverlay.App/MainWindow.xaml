@@ -173,6 +173,14 @@
                         <ComboBoxItem Content="0（无限）"/>
                     </ComboBox>
 
+                    <TextBlock Text="最长思考" Style="{StaticResource LabelStyle}" Margin="0,8,0,0"/>
+                    <ComboBox x:Name="ThinkTimeCombo" Style="{StaticResource ComboStyle}" SelectedIndex="2">
+                        <ComboBoxItem Content="1 秒" Tag="1000"/>
+                        <ComboBoxItem Content="2 秒" Tag="2000"/>
+                        <ComboBoxItem Content="4 秒" Tag="4000"/>
+                        <ComboBoxItem Content="6 秒" Tag="6000"/>
+                    </ComboBox>
+
                     <TextBlock Text="显示候选着数量" Style="{StaticResource LabelStyle}" Margin="0,8,0,0"/>
                     <ComboBox x:Name="TopMovesCombo" Style="{StaticResource ComboStyle}" SelectedIndex="4">
                         <ComboBoxItem Content="1"/>

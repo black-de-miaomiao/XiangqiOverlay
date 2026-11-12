@@ -18,10 +18,10 @@ public sealed class AppSettings
     public int BoardRows { get; set; } = 10;
 
     /// <summary>最大搜索深度</summary>
-    public int MaxDepth { get; set; } = 24;
+    public int MaxDepth { get; set; } = 30;
 
     /// <summary>最大思考时间（毫秒，0=不限制）</summary>
-    public long MaxTimeMs { get; set; } = 0;
+    public long MaxTimeMs { get; set; } = 4000;
 
     /// <summary>最大搜索节点数（0=不限制）</summary>
     public long MaxNodes { get; set; } = 0;

@@ -377,6 +377,7 @@ if (File.Exists(userImgPath))
     }
 }
 
+LogicTest.EngineSearchSchedulerTests.Run(Check);
 LogicTest.BoardIntegrityTests.Run(Check);
 LogicTest.ScreenshotNormalizationTests.Run(Check);
 

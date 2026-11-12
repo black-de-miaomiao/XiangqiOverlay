@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\XiangqiOverlay\src\XiangqiOverlay.Vision\XiangqiOverlay.Vision.csproj" />
+    <ProjectReference Include="..\XiangqiOverlay\src\XiangqiOverlay.Engine\XiangqiOverlay.Engine.csproj" />
   </ItemGroup>
 </Project>

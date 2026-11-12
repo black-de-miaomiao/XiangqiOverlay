@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>XiangqiOverlay.Platform</AssemblyName>
+    <RootNamespace>XiangqiOverlay.Platform</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XiangqiOverlay.Core\XiangqiOverlay.Core.csproj" />
+    <ProjectReference Include="..\XiangqiOverlay.Vision\XiangqiOverlay.Vision.csproj" />
+    <ProjectReference Include="..\XiangqiOverlay.Engine\XiangqiOverlay.Engine.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4.Windows" Version="4.13.0.20260627" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>XiangqiOverlay.App</AssemblyName>
+    <RootNamespace>XiangqiOverlay.App</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XiangqiOverlay.Core\XiangqiOverlay.Core.csproj" />
+    <ProjectReference Include="..\XiangqiOverlay.Vision\XiangqiOverlay.Vision.csproj" />
+    <ProjectReference Include="..\XiangqiOverlay.Engine\XiangqiOverlay.Engine.csproj" />
+    <ProjectReference Include="..\XiangqiOverlay.Platform\XiangqiOverlay.Platform.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4.Windows" Version="4.13.0.20260627" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="settings.example.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="runtime\pikafish\pikafish.exe" Condition="Exists('runtime\pikafish\pikafish.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>runtime\pikafish\pikafish.exe</Link>
+    </None>
+    <None Include="runtime\pikafish\default_nnue.bin" Condition="Exists('runtime\pikafish\default_nnue.bin')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>runtime\pikafish\default_nnue.bin</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

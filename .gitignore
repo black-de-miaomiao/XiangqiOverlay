@@ -1,0 +1,29 @@
+# .NET build output
+**/bin/
+**/obj/
+**/.vs/
+*.user
+*.suo
+*.pdb
+
+# Publish and temporary output
+**/dist/
+**/publish/
+**/scratch/
+**/TestResults/
+*.tmp
+*.bak
+crash.log
+in.txt
+windows_debug.txt
+logs/
+
+# Local user settings; keep settings.example.json
+**/settings.json
+
+# IDE
+.idea/
+.vscode/
+
+# Third-party engine binaries and bundled wiki stay on the local machine
+XiangqiOverlay/src/XiangqiOverlay.App/runtime/pikafish/

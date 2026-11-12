@@ -1,0 +1,213 @@
+<Window x:Class="XiangqiOverlay.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="XiangqiOverlay - JJ象棋盘面分析" Height="720" Width="1000"
+        WindowStartupLocation="CenterScreen"
+        Background="#1E1E2E"
+        WindowStyle="SingleBorderWindow"
+        ResizeMode="CanResize"
+        MinWidth="800" MinHeight="600"
+        Loaded="OnLoaded" Closing="OnClosing">
+    <Window.Resources>
+        <Style x:Key="MainBtn" TargetType="Button">
+            <Setter Property="Background" Value="#3B3B5C"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontFamily" Value="Microsoft YaHei"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#50507A"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.4"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="LabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#CCCCDC"/>
+            <Setter Property="FontFamily" Value="Microsoft YaHei"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,4,0,0"/>
+        </Style>
+        <Style x:Key="ComboStyle" TargetType="ComboBox">
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="FontFamily" Value="Microsoft YaHei"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部标题栏 -->
+        <Grid Grid.Row="0" Background="#2D2D44" Margin="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,8">
+                <TextBlock Text="JJ象棋盘面分析" FontSize="18" FontWeight="Bold"
+                           Foreground="#A0A0E0" FontFamily="Microsoft YaHei"/>
+                <TextBlock Text=" v1.0" FontSize="12" Foreground="#8080A0" VerticalAlignment="Bottom"
+                           Margin="8,0,0,2" FontFamily="Microsoft YaHei"/>
+            </StackPanel>
+        </Grid>
+
+        <!-- 主内容区 -->
+        <Grid Grid.Row="1" Margin="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="300"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 左侧：控制面板 -->
+            <Border Grid.Column="0" Background="#282838" CornerRadius="8" Padding="12" Margin="0,0,4,0">
+                <StackPanel>
+                    <!-- 目标窗口选择 -->
+                    <TextBlock Text="目标窗口" Style="{StaticResource LabelStyle}"/>
+                    <ComboBox x:Name="WindowCombo" Style="{StaticResource ComboStyle}"
+                              SelectionChanged="OnWindowSelected"/>
+                    <Button x:Name="RefreshBtn" Content="刷新窗口" Style="{StaticResource MainBtn}"
+                            Click="OnRefreshClick" Margin="0,4"/>
+
+                    <!-- 棋盘校准 -->
+                    <TextBlock Text="棋盘校准" Style="{StaticResource LabelStyle}" Margin="0,12,0,0"/>
+                    <Button Content="自动寻找棋盘" Style="{StaticResource MainBtn}"
+                            Click="OnAutoCalibrateClick"/>
+                    <Button Content="手动框选棋盘" Style="{StaticResource MainBtn}"
+                            Click="OnManualCalibrateClick"/>
+
+                    <!-- 执子设置 -->
+                    <TextBlock Text="我的执子" Style="{StaticResource LabelStyle}" Margin="0,12,0,0"/>
+                    <ComboBox x:Name="ColorCombo" Style="{StaticResource ComboStyle}" SelectedIndex="0">
+                        <ComboBoxItem Content="红方（下方）" Tag="Red"/>
+                        <ComboBoxItem Content="黑方（上方）" Tag="Black"/>
+                    </ComboBox>
+
+                    <TextBlock Text="当前行棋方" Style="{StaticResource LabelStyle}" Margin="0,12,0,0"/>
+                    <ComboBox x:Name="PlayerCombo" Style="{StaticResource ComboStyle}" SelectedIndex="0">
+                        <ComboBoxItem Content="红方" Tag="Red"/>
+                        <ComboBoxItem Content="黑方" Tag="Black"/>
+                    </ComboBox>
+
+                    <!-- 推荐模式 -->
+                    <CheckBox x:Name="OnlyOwnMovesCheck" Content="仅在我方回合推荐走法"
+                              Foreground="#D0D0E0" FontSize="11" Margin="0,8,0,0"/>
+
+                    <!-- 盘面读取方式 -->
+                    <TextBlock Text="盘面读取方式" Style="{StaticResource LabelStyle}" Margin="0,12,0,0"/>
+                    <ComboBox x:Name="ReadModeCombo" Style="{StaticResource ComboStyle}" SelectedIndex="0">
+                        <ComboBoxItem Content="自动（视觉识别）" Tag="Auto"/>
+                        <ComboBoxItem Content="仅视觉" Tag="VisionOnly"/>
+                    </ComboBox>
+
+                    <!-- 运行控制 -->
+                    <Button x:Name="StartBtn" Content="开始" Style="{StaticResource MainBtn}"
+                            Background="#3B6C3B" Click="OnStartClick" Margin="0,16,4,0"/>
+                    <Button x:Name="StopBtn" Content="停止" Style="{StaticResource MainBtn}"
+                            Background="#6C3B3B" Click="OnStopClick" IsEnabled="False"/>
+                    <Button Content="下一手推荐" Style="{StaticResource MainBtn}"
+                            Click="OnRequestAnalysisClick" Margin="0,4,4,0"/>
+
+                    <!-- 保存配置 -->
+                    <Button Content="保存配置" Style="{StaticResource MainBtn}"
+                            Click="OnSaveSettingsClick" Margin="0,16,4,0"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 中间：棋盘预览区 -->
+            <Border Grid.Column="1" Background="#202030" CornerRadius="8" Margin="4,0">
+                <Grid>
+                    <Canvas x:Name="PreviewCanvas" ClipToBounds="True"/>
+                </Grid>
+            </Border>
+
+            <!-- 右侧：引擎设置和分析信息 -->
+            <Border Grid.Column="2" Background="#282838" CornerRadius="8" Padding="12" Margin="4,0,0,0">
+                <StackPanel>
+                    <!-- 引擎设置 -->
+                    <TextBlock Text="引擎设置" Style="{StaticResource LabelStyle}"
+                               FontSize="14" FontWeight="Bold"/>
+                    <TextBlock Text="Pikafish 可执行文件" Style="{StaticResource LabelStyle}" Margin="0,8,0,0"/>
+                    <TextBox x:Name="EnginePathBox" FontSize="10" Padding="4" Background="#1E1E2E"
+                             Foreground="#CCCCDC" BorderBrush="#404060"/>
+                    <TextBlock Text="评估函数文件 (NNUE)" Style="{StaticResource LabelStyle}" Margin="0,4,0,0"/>
+                    <TextBox x:Name="EvalFileBox" FontSize="10" Padding="4" Background="#1E1E2E"
+                             Foreground="#CCCCDC" BorderBrush="#404060"/>
+
+                    <TextBlock Text="线程数" Style="{StaticResource LabelStyle}" Margin="0,8,0,0"/>
+                    <ComboBox x:Name="ThreadsCombo" Style="{StaticResource ComboStyle}" SelectedIndex="3">
+                        <ComboBoxItem Content="1"/>
+                        <ComboBoxItem Content="2"/>
+                        <ComboBoxItem Content="3"/>
+                        <ComboBoxItem Content="4"/>
+                        <ComboBoxItem Content="6"/>
+                        <ComboBoxItem Content="8"/>
+                    </ComboBox>
+
+                    <TextBlock Text="最大深度" Style="{StaticResource LabelStyle}" Margin="0,8,0,0"/>
+                    <ComboBox x:Name="DepthCombo" Style="{StaticResource ComboStyle}" SelectedIndex="2">
+                        <ComboBoxItem Content="12"/>
+                        <ComboBoxItem Content="16"/>
+                        <ComboBoxItem Content="24"/>
+                        <ComboBoxItem Content="30"/>
+                        <ComboBoxItem Content="0（无限）"/>
+                    </ComboBox>
+
+                    <TextBlock Text="显示候选着数量" Style="{StaticResource LabelStyle}" Margin="0,8,0,0"/>
+                    <ComboBox x:Name="TopMovesCombo" Style="{StaticResource ComboStyle}" SelectedIndex="4">
+                        <ComboBoxItem Content="1"/>
+                        <ComboBoxItem Content="2"/>
+                        <ComboBoxItem Content="3"/>
+                        <ComboBoxItem Content="4"/>
+                        <ComboBoxItem Content="5"/>
+                    </ComboBox>
+
+                    <CheckBox x:Name="ExcludeOverlayCheck" Content="禁止悬浮层截屏"
+                              Foreground="#CCCCDC" FontFamily="Microsoft YaHei" FontSize="12"
+                              IsChecked="True" Margin="0,8,0,0"/>
+
+                    <!-- 分析结果 -->
+                    <TextBlock Text="分析结果" Style="{StaticResource LabelStyle}"
+                               FontSize="14" FontWeight="Bold" Margin="0,16,0,0"/>
+                    <TextBlock x:Name="BestMoveText" Text="—" FontSize="20" FontWeight="Bold"
+                               Foreground="#FF6B6B" FontFamily="Consolas" Margin="0,4"/>
+                    <TextBlock x:Name="ScoreText" Text="评分: —"
+                               Foreground="#A0A0C0" FontFamily="Microsoft YaHei" FontSize="12"/>
+                    <TextBlock x:Name="WinRateText" Text="胜率: —"
+                               Foreground="#A0A0C0" FontFamily="Microsoft YaHei" FontSize="12"/>
+                    <TextBlock x:Name="DepthText" Text="深度: —"
+                               Foreground="#A0A0C0" FontFamily="Microsoft YaHei" FontSize="12"/>
+                    <TextBlock x:Name="PvText" Text="" TextWrapping="Wrap"
+                               Foreground="#9090B0" FontFamily="Consolas" FontSize="10"
+                               Margin="0,4"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- 底部状态栏 -->
+        <Border Grid.Row="2" Background="#2D2D44" Padding="12,6">
+            <TextBlock x:Name="StatusText" Text="就绪" Foreground="#8080A0"
+                       FontFamily="Microsoft YaHei" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>

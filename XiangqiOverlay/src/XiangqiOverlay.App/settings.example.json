@@ -1,0 +1,19 @@
+{
+  "PikafishExecutable": "runtime\\pikafish\\pikafish.exe",
+  "PikafishEvalFile": "runtime\\pikafish\\default_nnue.bin",
+  "BoardCols": 9,
+  "BoardRows": 10,
+  "MaxDepth": 30,
+  "MaxTimeMs": 0,
+  "MaxNodes": 0,
+  "AnalysisIntervalSeconds": 0.3,
+  "TopMoves": 5,
+  "OwnColor": "Red",
+  "CurrentPlayer": "Red",
+  "BoardReadMode": "Auto",
+  "ExcludeOverlayFromCapture": true,
+  "Threads": 6,
+  "HashSize": 256,
+  "MoveTime": 0,
+  "EnableDebugLog": false
+}

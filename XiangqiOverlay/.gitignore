@@ -1,0 +1,23 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.pdb
+
+## 发布输出
+dist/
+publish/
+
+## 运行时文件
+runtime/pikafish/*.exe
+runtime/pikafish/*.bin
+
+## IDE
+.idea/
+.vscode/
+
+## 临时文件
+*.tmp
+*.bak

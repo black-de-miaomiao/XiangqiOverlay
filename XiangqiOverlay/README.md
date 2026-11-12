@@ -53,6 +53,14 @@ dotnet restore XiangqiOverlay.sln
 dotnet build XiangqiOverlay.sln --configuration Debug
 ```
 
+### 回归测试
+
+```powershell
+dotnet run --project ..\LogicTest\LogicTest.csproj
+```
+
+盘面提交遵循两条不变量：未移动棋子的兵种不会被识别噪声改写；无法由合法走法解释的持续异常不会自动重锚定整张候选盘面。生产 BGRA 截图与离线 BGR 图片在识别前统一转换为三通道。
+
 ### 运行
 
 ```powershell

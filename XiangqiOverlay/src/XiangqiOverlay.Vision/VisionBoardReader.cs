@@ -32,7 +32,8 @@ public sealed class VisionBoardReader : IDisposable
                 return result;
             }
 
-            var board = _recognizer.Recognize(screenshot, calibration, previousBoard);
+            using var normalized = ScreenshotNormalizer.ToBgr(screenshot);
+            var board = _recognizer.Recognize(normalized, calibration, previousBoard);
             result.Board = board;
             result.Confidence = 0.8; // 简化置信度
             result.Flipped = _recognizer.Flipped;
@@ -53,8 +54,9 @@ public sealed class VisionBoardReader : IDisposable
     /// </summary>
     public (BoardCalibration calibration, BoardReadResult readResult) AutoDetectAndRead(Mat screenshot)
     {
-        var calibration = _detector.AutoDetect(screenshot);
-        var readResult = ReadBoard(screenshot, calibration);
+        using var normalized = ScreenshotNormalizer.ToBgr(screenshot);
+        var calibration = _detector.AutoDetect(normalized);
+        var readResult = ReadBoard(normalized, calibration);
         return (calibration, readResult);
     }
 

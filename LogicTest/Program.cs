@@ -133,6 +133,14 @@ using (var board = new Mat(560, 500, MatType.CV_8UC3, new Scalar(196, 176, 148))
             }
         Check($"连续两帧识别一致 (diffCells={diffCells})", diffCells == 0);
 
+        var expectedRaw = reader.LastRawBoard.Clone();
+        using var productionBgra = new Mat();
+        Cv2.CvtColor(board, productionBgra, ColorConversionCodes.BGR2BGRA);
+        var readProduction = reader.ReadBoard(productionBgra, cal);
+        Check("生产 BGRA 与离线 BGR 完整盘面识别一致",
+            readProduction.Board.CountDifferences(readAgain.Board) == 0 &&
+            reader.LastRawBoard.CountDifferences(expectedRaw) == 0);
+
         reader.Dispose();
     }
     detector.Dispose();
@@ -370,6 +378,7 @@ if (File.Exists(userImgPath))
 }
 
 LogicTest.BoardIntegrityTests.Run(Check);
+LogicTest.ScreenshotNormalizationTests.Run(Check);
 
 Console.WriteLine(failures == 0 ? "\n全部通过" : $"\n{failures} 个失败");
 return failures == 0 ? 0 : 1;

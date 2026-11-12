@@ -458,5 +458,7 @@ using (var g4 = new PieceRecognizer())
         t4[0, 9].Type == PieceType.Chariot);
 }
 
+LogicTest.BoardIntegrityTests.Run(Check);
+
 Console.WriteLine(failures == 0 ? "\n全部通过" : $"\n{failures} 个失败");
 return failures == 0 ? 0 : 1;

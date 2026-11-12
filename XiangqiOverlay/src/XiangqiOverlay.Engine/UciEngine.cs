@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Text;
-using System.Text.RegularExpressions;
 using XiangqiOverlay.Core;
 
 namespace XiangqiOverlay.Engine;
@@ -22,6 +20,9 @@ public sealed class UciEngine : IDisposable
     private readonly ManualResetEventSlim _uciOkEvent = new(false);
     private readonly ManualResetEventSlim _readyOkEvent = new(false);
     private string _engineName = "Pikafish";
+    private readonly EngineSearchScheduler _searchScheduler = new();
+    private readonly object _searchLock = new();
+    private readonly UciOutputParser _outputParser = new();
 
     /// <summary>
     /// 当收到分析输出时触发
@@ -89,6 +90,9 @@ public sealed class UciEngine : IDisposable
 
             StatusChanged?.Invoke("正在初始化引擎...");
 
+            lock (_searchLock)
+                _searchScheduler.Reset();
+
             // 发送 UCI 握手
             _uciOkEvent.Reset();
             SendCommand("uci");
@@ -147,14 +151,12 @@ public sealed class UciEngine : IDisposable
     /// </summary>
     public void Analyze(string fen, int maxDepth = 0, long maxNodes = 0, long maxTimeMs = 0)
     {
-        // 1. 严格校验 FEN 合法性，防止非法局面导致 Pikafish 进程崩溃退出
         if (!FenValidator.Validate(fen, out var error))
         {
             ErrorOccurred?.Invoke($"盘面暂不稳定 ({error})，等待稳定后再分析");
             return;
         }
 
-        // 2. 如果引擎进程异常退出，自动重新唤醒拉起
         if (!IsRunning)
         {
             StatusChanged?.Invoke("检测到引擎离线，正在自动拉起重启...");
@@ -165,24 +167,18 @@ public sealed class UciEngine : IDisposable
             }
         }
 
-        // 先停止之前的分析
-        SendCommand("stop");
-
-        // 发送局面
-        SendCommand($"position fen {fen}");
-
-        // 构建分析命令
-        var goBuilder = new StringBuilder("go");
-        if (maxDepth > 0)
-            goBuilder.Append($" depth {maxDepth}");
-        if (maxNodes > 0)
-            goBuilder.Append($" nodes {maxNodes}");
-        if (maxTimeMs > 0)
-            goBuilder.Append($" movetime {maxTimeMs}");
-        if (maxDepth == 0 && maxNodes == 0 && maxTimeMs == 0)
-            goBuilder.Append(" depth 24"); // 默认深度
-
-        SendCommand(goBuilder.ToString());
+        lock (_searchLock)
+        {
+            _searchScheduler.Submit(fen, maxDepth, maxNodes, maxTimeMs, out bool startImmediately);
+            if (startImmediately)
+            {
+                StartSearch(_searchScheduler.Active!);
+            }
+            else
+            {
+                SendCommand("stop");
+            }
+        }
     }
 
     /// <summary>
@@ -190,22 +186,18 @@ public sealed class UciEngine : IDisposable
     /// </summary>
     public void Stop()
     {
-        if (IsRunning)
-            SendCommand("stop");
+        lock (_searchLock)
+        {
+            _searchScheduler.CancelPending();
+            if (IsRunning && _searchScheduler.Active != null)
+                SendCommand("stop");
+        }
     }
 
-    /// <summary>
-    /// 开始持续分析（类似 go infinite + 定期读取）
-    /// </summary>
-    public void AnalyzeInfinite(string fen)
+    private void StartSearch(EngineSearchRequest request)
     {
-        if (!IsRunning)
-            return;
-
-        SendCommand("stop");
-        Thread.Sleep(50);
-        SendCommand($"position fen {fen}");
-        SendCommand("go infinite");
+        SendCommand($"position fen {request.Fen}");
+        SendCommand(request.BuildGoCommand());
     }
 
     /// <summary>
@@ -254,15 +246,43 @@ public sealed class UciEngine : IDisposable
         }
         else if (line.StartsWith("bestmove"))
         {
-            // 引擎给出了最终着法
-            var result = ParseBestMove(line);
+            AnalysisResult? result;
+            lock (_searchLock)
+            {
+                var active = _searchScheduler.Active;
+                if (active == null)
+                    return;
+
+                result = _outputParser.ParseBestMove(line, _engineName);
+                if (result != null)
+                {
+                    result.Fen = active.Fen;
+                    result.SearchId = active.Id;
+                }
+
+                var next = _searchScheduler.CompleteActive();
+                if (next != null)
+                    StartSearch(next);
+            }
             if (result != null)
                 AnalysisReceived?.Invoke(result);
         }
         else if (line.StartsWith("info"))
         {
-            // 实时分析信息
-            var result = ParseInfoLine(line);
+            AnalysisResult? result;
+            lock (_searchLock)
+            {
+                var active = _searchScheduler.Active;
+                if (active == null)
+                    return;
+
+                result = _outputParser.ParseInfoLine(line, _engineName);
+                if (result != null)
+                {
+                    result.Fen = active.Fen;
+                    result.SearchId = active.Id;
+                }
+            }
             if (result != null)
                 AnalysisReceived?.Invoke(result);
         }
@@ -272,179 +292,6 @@ public sealed class UciEngine : IDisposable
     {
         if (!string.IsNullOrEmpty(e.Data))
             ErrorOccurred?.Invoke(e.Data);
-    }
-
-    /// <summary>
-    /// 解析 "info" 行
-    /// 格式：info depth D seldepth S score cp X nodes N nps P time T pv M1 M2 ...
-    /// 或：info depth D currmove M currmovenumber N
-    /// 或：info string ...
-    /// </summary>
-    private AnalysisResult? ParseInfoLine(string line)
-    {
-        try
-        {
-            var result = new AnalysisResult { EngineName = _engineName };
-
-            // 提取 depth
-            var depthMatch = Regex.Match(line, @"\bdepth (\d+)\b");
-            if (depthMatch.Success)
-                result.Depth = int.Parse(depthMatch.Groups[1].Value);
-
-            // 提取 nodes
-            var nodesMatch = Regex.Match(line, @"\bnodes (\d+)\b");
-            if (nodesMatch.Success)
-                result.TotalNodes = long.Parse(nodesMatch.Groups[1].Value);
-
-            // 提取 time
-            var timeMatch = Regex.Match(line, @"\btime (\d+)\b");
-            if (timeMatch.Success)
-                result.TimeMs = long.Parse(timeMatch.Groups[1].Value);
-
-            // 提取 score
-            // score cp X 或 score mate Y 或 score lowerbound X 或 score upperbound X
-            var scoreMatch = Regex.Match(line, @"\bscore (cp|mate|lowerbound|upperbound) (-?\d+)\b");
-            if (scoreMatch.Success)
-            {
-                string scoreType = scoreMatch.Groups[1].Value;
-                int scoreVal = int.Parse(scoreMatch.Groups[2].Value);
-
-                if (scoreType == "cp")
-                    result.Score = scoreVal;
-                else if (scoreType == "mate")
-                    result.Score = scoreVal > 0 ? 100000 - scoreVal : -100000 - scoreVal;
-
-                // 将厘 UC-Pawn 分数转换为胜率（简化公式）
-                // Pikafish 的分数范围大约 -3000 ~ 3000
-                // 胜率 = 1 / (1 + exp(-score / 600))
-                result.WinRate = 1.0 / (1.0 + Math.Exp(-result.Score / 600.0));
-            }
-
-            // 提取 pv（主要变着）
-            var pvMatch = Regex.Match(line, @"\bpv\s+(.+)$");
-            if (pvMatch.Success)
-            {
-                var pvStr = pvMatch.Groups[1].Value.Trim();
-                var moves = ParsePvMoves(pvStr);
-
-                if (moves.Count > 0)
-                {
-                    var bestMove = new AnalysisMove
-                    {
-                        Move = moves[0].ToUcci(),
-                        WinRate = result.WinRate,
-                        Score = result.Score,
-                        Depth = result.Depth,
-                        Nodes = result.TotalNodes,
-                        PvString = pvStr
-                    };
-                    result.Moves.Add(bestMove);
-
-                    // 如果有多手，也添加为候选
-                    // 注意：UCCI 的 pv 通常只给出一个主要变着序列
-                    // 多 PV 需要设置 MultiPV 选项
-                }
-            }
-
-            // 提取 currmove（当前正在搜索的着法）
-            if (result.Moves.Count == 0)
-            {
-                var currMoveMatch = Regex.Match(line, @"\bcurrmove (\S+)\b");
-                if (currMoveMatch.Success)
-                {
-                    result.Moves.Add(new AnalysisMove
-                    {
-                        Move = currMoveMatch.Groups[1].Value,
-                        WinRate = result.WinRate,
-                        Score = result.Score,
-                        Depth = result.Depth,
-                        Nodes = result.TotalNodes
-                    });
-                }
-            }
-
-            _lastScore = result.Score;
-            _lastWinRate = result.WinRate;
-            _lastDepth = result.Depth;
-
-            result.Fen = "current"; // 实际由调用方填充
-            return result.Moves.Count > 0 ? result : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private int _lastScore;
-    private double _lastWinRate;
-    private int _lastDepth;
-
-    /// <summary>
-    /// 解析 bestmove 行
-    /// 格式：bestmove h2e2 ponder e2e6
-    /// </summary>
-    private AnalysisResult? ParseBestMove(string line)
-    {
-        try
-        {
-            var match = Regex.Match(line, @"bestmove (\S+)(?:\s+ponder\s+(\S+))?");
-            if (!match.Success)
-                return null;
-
-            var bestMoveStr = match.Groups[1].Value;
-            var ponderStr = match.Groups[2].Success ? match.Groups[2].Value : null;
-
-            var result = new AnalysisResult
-            {
-                EngineName = _engineName,
-                Score = _lastScore,
-                WinRate = _lastWinRate,
-                Depth = _lastDepth,
-                Timestamp = DateTime.Now
-            };
-
-            result.Moves.Add(new AnalysisMove
-            {
-                Move = bestMoveStr,
-                Score = _lastScore,
-                WinRate = _lastWinRate,
-                Depth = _lastDepth,
-                PvString = ponderStr ?? string.Empty
-            });
-
-            return result;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// 解析 PV 字符串中的走法列表
-    /// </summary>
-    private List<ChessMove> ParsePvMoves(string pvStr)
-    {
-        var moves = new List<ChessMove>();
-        var tokens = pvStr.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-
-        foreach (var token in tokens)
-        {
-            if (token.Length < 4)
-                continue;
-
-            try
-            {
-                moves.Add(ChessMove.FromUcci(token));
-            }
-            catch
-            {
-                break;
-            }
-        }
-
-        return moves;
     }
 
     /// <summary>

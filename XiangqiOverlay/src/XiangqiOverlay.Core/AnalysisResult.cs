@@ -59,6 +59,9 @@ public sealed class AnalysisResult
     /// <summary>当前盘面 FEN</summary>
     public string Fen { get; set; } = string.Empty;
 
+    /// <summary>发起本次搜索的递增会话号</summary>
+    public long SearchId { get; set; }
+
     /// <summary>所有候选着法（按评分排序）</summary>
     public List<AnalysisMove> Moves { get; set; } = new();
 

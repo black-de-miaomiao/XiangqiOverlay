@@ -128,34 +128,6 @@ public sealed class MainController : IDisposable
         BoardRead?.Invoke(readResult);
     }
 
-    /// <summary>
-    /// 重新锚定候选体检：差异过大或子数突变的候选绝不转正。
-    /// 轮询 ≤450ms 时，即使漏看几步棋，与基准的差异也有限；
-    /// 一张"稳定但错乱"的候选（高亮干扰下的批量误读）在此被拦下，
-    /// 避免垃圾盘面被冻结进基准、随后被类型继承长期固化。
-    /// </summary>
-    private static bool IsSaneReanchor(BoardState candidate, BoardState committed)
-    {
-        int diff = candidate.CountDifferences(committed);
-        if (diff > 14)
-            return false;
-        int occupancyDiff = CountOccupancyColorDifferences(candidate, committed);
-        if (occupancyDiff == 0 && diff > 0)
-            return false;
-        if (occupancyDiff > 8 || diff - occupancyDiff > 4)
-            return false;
-
-        foreach (var side in new[] { PieceColor.Red, PieceColor.Black })
-        {
-            int candCount = candidate.GetAllPieces().Count(p => p.color == side);
-            int committedCount = committed.GetAllPieces().Count(p => p.color == side);
-            if (Math.Abs(candCount - committedCount) > 2)
-                return false;
-        }
-
-        return true;
-    }
-
     private static int CountOccupancyColorDifferences(BoardState a, BoardState b)
     {
         int count = 0;
@@ -400,6 +372,12 @@ public sealed class MainController : IDisposable
         {
             StatusChanged?.Invoke("棋盘校准完成");
             UpdateOverlayPosition();
+            if (_trackedBoard != null)
+            {
+                RequestAnalysis();
+                return true;
+            }
+
             try
             {
                 var readResult = _visionReader.ReadBoard(screenshot, _calibration, _trackedBoard);
@@ -451,6 +429,12 @@ public sealed class MainController : IDisposable
 
         if (_targetWindow != null)
         {
+            if (_trackedBoard != null)
+            {
+                RequestAnalysis();
+                return;
+            }
+
             try
             {
                 var screenshot = _capturer.CaptureWindow(_targetWindow.Handle);
@@ -898,23 +882,40 @@ public sealed class MainController : IDisposable
 
                     if (legal && !(redLeft && blackLeft))
                     {
-                        // 走法合法：提交并翻转行棋方
+                        // 走法合法：从上一基准重建盘面，禁止无关格子的视觉类型噪声进入基准
+                        if (!ConfirmedBoardUpdater.TryBuildMoveCommit(
+                                committedBoard, rawBoard, new[] { move!.Value },
+                                readResult.HighlightedCells, out var confirmedBoard) || confirmedBoard == null)
+                        {
+                            illegalStreak++;
+                            StatusChanged?.Invoke("走子的原始占用证据不足，已保留基准盘面");
+                            Thread.Sleep(pollMs);
+                            continue;
+                        }
+
                         illegalStreak = 0;
                         var nextPlayer = movedColor == PieceColor.Red ? PlayerSide.Black : PlayerSide.Red;
-                        readResult.Board.CurrentPlayer = nextPlayer;
+                        confirmedBoard.CurrentPlayer = nextPlayer;
                         _settings.CurrentPlayer = nextPlayer == PlayerSide.Red ? "Red" : "Black";
                         CurrentPlayerChanged?.Invoke(nextPlayer);
 
-                        readResult.PreviousBoard = committedBoard;
-                        readResult.LastMove = move;
+                        var confirmedResult = new BoardReadResult
+                        {
+                            Board = confirmedBoard.Clone(),
+                            PreviousBoard = committedBoard,
+                            LastMove = move,
+                            HighlightedCells = readResult.HighlightedCells.ToList(),
+                            Source = BoardReadMode.VisionOnly,
+                            Timestamp = DateTime.Now
+                        };
 
-                        committedBoard = readResult.Board.Clone();
+                        committedBoard = confirmedBoard.Clone();
                         _trackedBoard = committedBoard.Clone();
                         seenSeq = Interlocked.Increment(ref _commitSeq);
-                        _analysisManager.SubmitBoard(readResult);
+                        _analysisManager.SubmitBoard(confirmedResult);
                         recentFrames.Clear();
                         ClearExpectedBoard();
-                        PublishBoardRead(readResult);
+                        PublishBoardRead(confirmedResult);
                     }
                     else
                     {
@@ -924,36 +925,17 @@ public sealed class MainController : IDisposable
                         illegalStreak++;
                         if (illegalStreak >= IllegalReanchorFrames)
                         {
-                            // 持续无法解释：以当前识别重新锚定，行棋方保持不变
-                            //（能解释这种残留的通常是偶数步连续走子，行棋方恰好不变）
-                            if (IsSaneReanchor(readResult.Board, committedBoard))
-                            {
-                                readResult.Board.CurrentPlayer = committedBoard.CurrentPlayer;
-                                committedBoard = readResult.Board.Clone();
-                                _trackedBoard = committedBoard.Clone();
-                                seenSeq = Interlocked.Increment(ref _commitSeq);
-                                _analysisManager.SubmitBoard(readResult);
-                                recentFrames.Clear();
-                                illegalStreak = 0;
-                                ClearExpectedBoard();
-                                PublishBoardRead(readResult);
-                                StatusChanged?.Invoke("盘面连续异常已重新锚定（行棋方保持不变，点\"下一手推荐\"可手动校正）");
-                            }
-                            else
-                            {
-                                // 候选盘面明显异常（差异过大/子数突变）：拒绝转正，
-                                // 继续观察——宁可显示旧盘面等待，也绝不把垃圾冻结进基准
-                                illegalStreak = 0;
-                                StatusChanged?.Invoke("检测到异常盘面，已拒绝锚定（点\"下一手推荐\"可手动同步）");
-                            }
+                            // 持续异常不能证明任何棋子发生了变化，更不能改变其兵种。
+                            illegalStreak = 0;
+                            StatusChanged?.Invoke("盘面持续异常且无法由合法走法解释，已保留基准；请重新校准或手动同步");
                         }
                     }
                 }
                 else if (diffFromCommitted > 6)
                 {
                     // 大幅变化（连续多步未捕获 / 识别错乱 / 悔棋等）：
-                    // 等盘面高度一致（4 帧中 ≥3 帧相同）持续 2 轮后重新锚定，
-                    // 恢复分析能力，绝不永久卡死。
+                    // 等盘面高度一致（4 帧中 ≥3 帧相同）持续 2 轮后提示手动同步；
+                    // 稳定但无法由合法走法解释的候选绝不转正。
                     if (similarCount >= 3)
                         bigDiffStreak++;
                     else
@@ -961,31 +943,9 @@ public sealed class MainController : IDisposable
 
                     if (bigDiffStreak >= 2)
                     {
-                        if (IsSaneReanchor(readResult.Board, committedBoard))
-                        {
-                            // 无法推断走了几步，行棋方按上一基准取反近似
-                            var nextPlayer = committedBoard.CurrentPlayer == PlayerSide.Red
-                                ? PlayerSide.Black : PlayerSide.Red;
-                            readResult.Board.CurrentPlayer = nextPlayer;
-                            _settings.CurrentPlayer = nextPlayer == PlayerSide.Red ? "Red" : "Black";
-                            CurrentPlayerChanged?.Invoke(nextPlayer);
-
-                            committedBoard = readResult.Board.Clone();
-                            _trackedBoard = committedBoard.Clone();
-                            seenSeq = Interlocked.Increment(ref _commitSeq);
-                            _analysisManager.SubmitBoard(readResult);
-                            recentFrames.Clear();
-                            bigDiffStreak = 0;
-                            illegalStreak = 0;
-                            ClearExpectedBoard();
-                            PublishBoardRead(readResult);
-                            StatusChanged?.Invoke("盘面大幅变化已稳定，已重新锚定基准盘面");
-                        }
-                        else
-                        {
-                            bigDiffStreak = 0;
-                            StatusChanged?.Invoke("检测到异常盘面，已拒绝锚定（点\"下一手推荐\"可手动同步）");
-                        }
+                        // 稳定并不等于正确；没有合法走法序列时绝不接受整张候选盘面。
+                        bigDiffStreak = 0;
+                        StatusChanged?.Invoke("盘面大幅变化且无法由合法走法唯一解释，已保留基准；请手动同步");
                     }
                 }
                 // 其余情况（diff=1 噪点 / [2,6] 但尚未凑齐 2 帧一致或无合法解释 / >6 但尚不稳定）：继续观察
@@ -1155,12 +1115,33 @@ public sealed class MainController : IDisposable
 
                 if (legal)
                 {
+                    if (!ConfirmedBoardUpdater.TryBuildMoveCommit(
+                            _trackedBoard, rawBoard, new[] { move!.Value },
+                            chosen.HighlightedCells, out var confirmedBoard) || confirmedBoard == null)
+                    {
+                        _analysisManager.SubmitBoard(new BoardReadResult
+                        {
+                            Board = _trackedBoard.Clone(),
+                            Source = BoardReadMode.VisionOnly,
+                            Timestamp = DateTime.Now
+                        });
+                        StatusChanged?.Invoke("走子的原始占用证据不足，已保留原盘面");
+                        return;
+                    }
+
                     var nextPlayer = movedColor == PieceColor.Red ? PlayerSide.Black : PlayerSide.Red;
-                    chosen.Board.CurrentPlayer = nextPlayer;
+                    confirmedBoard.CurrentPlayer = nextPlayer;
                     _settings.CurrentPlayer = nextPlayer == PlayerSide.Red ? "Red" : "Black";
                     CurrentPlayerChanged?.Invoke(nextPlayer);
-                    chosen.PreviousBoard = _trackedBoard;
-                    chosen.LastMove = move;
+                    chosen = new BoardReadResult
+                    {
+                        Board = confirmedBoard.Clone(),
+                        PreviousBoard = _trackedBoard,
+                        LastMove = move,
+                        HighlightedCells = chosen.HighlightedCells.ToList(),
+                        Source = BoardReadMode.VisionOnly,
+                        Timestamp = DateTime.Now
+                    };
                 }
                 else
                 {
@@ -1206,25 +1187,22 @@ public sealed class MainController : IDisposable
             }
             else
             {
-                // 首次同步或大幅变化：只有两次原始识别稳定且候选盘面通过
-                // 完整性检查时才允许重锚，防止按钮把一帧错误识别扩散到全盘。
-                bool canReanchor = _trackedBoard == null ||
-                    (rawStable && IsSaneReanchor(chosen.Board, _trackedBoard));
-                if (!canReanchor)
+                // 只有首次同步可以直接建立盘面；已有基准的大幅变化必须由合法走法解释。
+                if (_trackedBoard != null)
                 {
                     _analysisManager.SubmitBoard(new BoardReadResult
                     {
-                        Board = _trackedBoard!.Clone(),
+                        Board = _trackedBoard.Clone(),
                         Source = BoardReadMode.VisionOnly,
                         Timestamp = DateTime.Now
                     });
-                    StatusChanged?.Invoke("当前画面不稳定或异常，已保留原盘面");
+                    StatusChanged?.Invoke("当前变化无法由合法走法解释，已保留原盘面；请检查校准");
                     return;
                 }
 
-                chosen.Board.CurrentPlayer = _trackedBoard?.CurrentPlayer
-                    ?? (_settings.CurrentPlayer == "Black" ? PlayerSide.Black : PlayerSide.Red);
-                StatusChanged?.Invoke("已按稳定画面同步盘面（行棋方保持不变）");
+                chosen.Board.CurrentPlayer = _settings.CurrentPlayer == "Black"
+                    ? PlayerSide.Black : PlayerSide.Red;
+                StatusChanged?.Invoke("已建立初始盘面");
             }
 
             _trackedBoard = chosen.Board.Clone();

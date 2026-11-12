@@ -381,6 +381,7 @@ LogicTest.EngineSearchSchedulerTests.Run(Check);
 LogicTest.UciOutputParserTests.Run(Check);
 LogicTest.AnalysisManagerTests.Run(Check);
 LogicTest.RecommendationPromptPolicyTests.Run(Check);
+LogicTest.TurnRecoveryTests.Run(Check);
 LogicTest.BoardIntegrityTests.Run(Check);
 LogicTest.ScreenshotNormalizationTests.Run(Check);
 

@@ -42,8 +42,8 @@ public static class AnalysisManagerTests
     private sealed class FakeEngine : IUciEngine
     {
         public event Action<AnalysisResult>? AnalysisReceived;
-        public event Action<string>? ErrorOccurred;
-        public event Action<string>? StatusChanged;
+        public event Action<string>? ErrorOccurred { add { } remove { } }
+        public event Action<string>? StatusChanged { add { } remove { } }
         public bool IsRunning => true;
         public string LastFen { get; private set; } = string.Empty;
         public int LastDepth { get; private set; }
